@@ -51,6 +51,10 @@ npm run preview
 - Vite 5
 - Zero external UI libraries
 
+## Demo
+
+https://github.com/user-attachments/assets/1831df87-9c9f-47bd-b043-9499f4eebffc
+
 ## Notes
 
 - Tier detection is inferred from `anthropic-ratelimit-*` response headers — not an official API endpoint
