@@ -31,7 +31,8 @@ const KEY_DEFS = [
       ["anthropic-ratelimit-requests-limit","anthropic-ratelimit-tokens-limit"].forEach(h => { const v = r.headers.get(h); if(v) rl[h]=v; });
       const rpm = parseInt(rl["anthropic-ratelimit-requests-limit"])||null;
       const tpm = parseInt(rl["anthropic-ratelimit-tokens-limit"])||null;
-      return { valid: true, info: { "RPM Limit": rpm, "TPM Limit": tpm?.toLocaleString(), "Model Used": "claude-haiku-4-5-20251001" } };
+      const isPaid = rpm != null && rpm > 5;
+      return { valid: true, paid: isPaid, keyType: isPaid ? 'Paid Tier' : 'Free Tier', info: { "RPM Limit": rpm, "TPM Limit": tpm?.toLocaleString(), "Model Used": "claude-haiku-4-5-20251001", "Plan": isPaid ? '💳 Paid' : '🆓 Free' } };
     },
   },
 
@@ -46,8 +47,9 @@ const KEY_DEFS = [
       });
       const d = await r.json();
       if (!r.ok) return { valid: false, error: d?.error?.message };
-      const models = d.data?.slice(0,5).map(m=>m.id) || [];
-      return { valid: true, info: { "Models (sample)": models.join(", "), "Object": d.object } };
+      const models = d.data?.map(m=>m.id) || [];
+      const hasPaid = models.some(m => m.includes('gpt-4') || m.includes('o1') || m.includes('o3'));
+      return { valid: true, paid: hasPaid, keyType: hasPaid ? 'Paid (GPT-4 access)' : 'Free/Limited', info: { "Models (sample)": models.slice(0,5).join(", "), "GPT-4 Access": hasPaid ? '✅ Yes' : '❌ No', "Plan": hasPaid ? '💳 Paid' : '🆓 Free/Trial' } };
     },
   },
 
@@ -61,7 +63,7 @@ const KEY_DEFS = [
       const d = await r.json();
       if (!r.ok) return { valid: false, error: d?.error?.message };
       const models = d.models?.slice(0,4).map(m=>m.name) || [];
-      return { valid: true, info: { "Models (sample)": models.join(", ") } };
+      return { valid: true, paid: null, info: { "Models (sample)": models.join(", "), "Plan": '⚠ Tier unknown (free tier exists)' } };
     },
   },
 
@@ -76,7 +78,8 @@ const KEY_DEFS = [
       });
       const d = await r.json();
       if (!r.ok) return { valid: false, error: d?.error || d?.message };
-      return { valid: true, info: { "Username": d.name, "Type": d.type, "Orgs": d.orgs?.map(o=>o.name).join(", ")||"none" } };
+      const hfPaid = d.orgs?.some(o => o.isPro || o.type === 'enterprise') || d.isPro || false;
+      return { valid: true, paid: hfPaid, keyType: hfPaid ? 'Pro/Enterprise' : 'Free', info: { "Username": d.name, "Type": d.type, "Orgs": d.orgs?.map(o=>o.name).join(", ")||"none", "Plan": hfPaid ? '💳 Pro/Enterprise' : '🆓 Free' } };
     },
   },
 
@@ -93,7 +96,8 @@ const KEY_DEFS = [
       const d = await r.json();
       if (!r.ok) return { valid: false, error: d?.message };
       const scopes = r.headers.get("x-oauth-scopes") || "none";
-      return { valid: true, scopes: scopes.split(",").map(s=>s.trim()), info: { "User": d.login, "Name": d.name, "Plan": d.plan?.name, "Private Repos": d.total_private_repos, "Scopes": scopes } };
+      const ghPaid = d.plan?.name && d.plan.name !== 'free';
+      return { valid: true, paid: ghPaid, keyType: d.plan?.name || 'unknown', scopes: scopes.split(",").map(s=>s.trim()), info: { "User": d.login, "Name": d.name, "Plan": ghPaid ? `💳 ${d.plan?.name}` : '🆓 Free', "Private Repos": d.total_private_repos, "Scopes": scopes } };
     },
   },
 
@@ -137,7 +141,7 @@ const KEY_DEFS = [
       const account = text.match(/<Account>(.*?)<\/Account>/)?.[1];
       const arn     = text.match(/<Arn>(.*?)<\/Arn>/)?.[1];
       const userId  = text.match(/<UserId>(.*?)<\/UserId>/)?.[1];
-      return { valid: true, info: { "Account ID": account, "ARN": arn, "User ID": userId } };
+      return { valid: true, paid: true, keyType: 'AWS Account', info: { "Account ID": account, "ARN": arn, "User ID": userId, "Plan": '💳 Paid AWS Account' } };
     },
   },
 
@@ -154,10 +158,11 @@ const KEY_DEFS = [
       const d = await r.json();
       if (!r.ok) return { valid: false, error: d?.error?.message };
       const isLive = key.startsWith("sk_live_") || key.startsWith("rk_live_");
-      return { valid: true, info: {
+      return { valid: true, paid: true, keyType: isLive ? 'LIVE (Production)' : 'TEST', info: {
         "Account ID": d.id, "Business": d.business_profile?.name || d.settings?.dashboard?.display_name,
         "Country": d.country, "Currency": d.default_currency?.toUpperCase(),
-        "Mode": isLive ? "🔴 LIVE" : "🟡 TEST", "Charges Enabled": d.charges_enabled,
+        "Mode": isLive ? "🔴 LIVE — PRODUCTION" : "🟡 TEST", "Charges Enabled": d.charges_enabled,
+        "Plan": isLive ? '💳 LIVE / PAID' : '🧪 Test Mode',
       }};
     },
   },
@@ -175,7 +180,7 @@ const KEY_DEFS = [
       });
       const d = await r.json();
       if (!d.ok) return { valid: false, error: d.error };
-      return { valid: true, info: { "Team": d.team, "User": d.user, "Bot": d.bot_id||"n/a", "Workspace URL": d.url } };
+      return { valid: true, paid: null, info: { "Team": d.team, "User": d.user, "Bot": d.bot_id||"n/a", "Workspace URL": d.url, "Plan": '⚠ Paid/Free unknown' } };
     },
   },
 
@@ -188,7 +193,7 @@ const KEY_DEFS = [
       const r = await fetch(`https://api.telegram.org/bot${key}/getMe`);
       const d = await r.json();
       if (!d.ok) return { valid: false, error: d.description };
-      return { valid: true, info: { "Bot Name": d.result.first_name, "Username": `@${d.result.username}`, "Bot ID": d.result.id, "Can Join Groups": d.result.can_join_groups } };
+      return { valid: true, paid: false, keyType: 'Bot Token (Free)', info: { "Bot Name": d.result.first_name, "Username": `@${d.result.username}`, "Bot ID": d.result.id, "Can Join Groups": d.result.can_join_groups, "Plan": '🆓 Free (Telegram bots are free)' } };
     },
   },
 
@@ -207,7 +212,8 @@ const KEY_DEFS = [
       });
       const d = await r.json();
       if (!r.ok) return { valid: false, error: d?.message };
-      return { valid: true, info: { "Account Name": d.friendly_name, "Status": d.status, "Type": d.type, "Created": d.date_created } };
+      const twPaid = d.type === 'Full' || d.status === 'active';
+      return { valid: true, paid: twPaid, keyType: d.type, info: { "Account Name": d.friendly_name, "Status": d.status, "Type": d.type, "Created": d.date_created, "Plan": twPaid ? '💳 Paid/Active' : '🆓 Trial' } };
     },
   },
 
@@ -222,7 +228,8 @@ const KEY_DEFS = [
       });
       const d = await r.json();
       if (!r.ok) return { valid: false, error: d?.errors?.[0]?.message || `HTTP ${r.status}` };
-      return { valid: true, info: { "Username": d.username, "Type": d.type } };
+      const sgPaid = d.type && d.type !== 'free';
+      return { valid: true, paid: sgPaid, keyType: d.type, info: { "Username": d.username, "Type": d.type, "Plan": sgPaid ? '💳 Paid' : '🆓 Free' } };
     },
   },
 
@@ -251,7 +258,7 @@ const KEY_DEFS = [
         // Show custom claims
         const reserved = ["sub","iss","aud","exp","iat","nbf","jti"];
         Object.keys(payload).filter(k=>!reserved.includes(k)).slice(0,5).forEach(k => { info[`Claim: ${k}`] = JSON.stringify(payload[k]); });
-        return { valid: true, info, warning: expired ? "Token is expired" : null };
+        return { valid: true, paid: null, info, warning: expired ? "Token is expired" : null };
       } catch(e) {
         return { valid: false, error: "Failed to decode JWT: " + e.message };
       }
@@ -272,7 +279,7 @@ const KEY_DEFS = [
       const d = await r.json();
       if (!r.ok) return { valid: false, error: d?.message || `HTTP ${r.status}` };
       const domains = d.items?.map(i=>i.name).join(", ") || "none";
-      return { valid: true, info: { "Domains": domains, "Total Domains": d.total_count } };
+      return { valid: true, paid: d.total_count > 0, info: { "Domains": domains, "Total Domains": d.total_count, "Plan": d.total_count > 0 ? '💳 Active/Paid' : '🆓 Free/Trial' } };
     },
   },
 
@@ -310,7 +317,8 @@ const KEY_DEFS = [
       });
       const d = await r.json();
       if (!r.ok) return { valid: false, error: d?.errors || `HTTP ${r.status}` };
-      return { valid: true, info: { "Shop": d.shop?.name, "Email": d.shop?.email, "Domain": d.shop?.domain, "Plan": d.shop?.plan_name, "Currency": d.shop?.currency } };
+      const shopPaid = d.shop?.plan_name && !d.shop.plan_name.includes('trial') && !d.shop.plan_name.includes('free');
+      return { valid: true, paid: shopPaid, keyType: d.shop?.plan_name, info: { "Shop": d.shop?.name, "Email": d.shop?.email, "Domain": d.shop?.domain, "Plan": shopPaid ? `💳 ${d.shop?.plan_name}` : `🆓 ${d.shop?.plan_name||'unknown'}`, "Currency": d.shop?.currency } };
     },
   },
 
@@ -325,7 +333,7 @@ const KEY_DEFS = [
       });
       const d = await r.json();
       if (!r.ok) return { valid: false, error: d?.message };
-      return { valid: true, info: { "Username": d.username, "Name": d.name, "Email": d.email, "State": d.state, "Admin": d.is_admin } };
+      return { valid: true, paid: null, info: { "Username": d.username, "Name": d.name, "Email": d.email, "State": d.state, "Admin": d.is_admin, "Plan": '⚠ Paid/Free unknown' } };
     },
   },
 
@@ -340,7 +348,7 @@ const KEY_DEFS = [
       });
       const d = await r.json();
       if (!r.ok) return { valid: false, error: d?.message };
-      return { valid: true, info: { "Username": `${d.username}#${d.discriminator}`, "Bot ID": d.id, "Verified": d.verified, "Email": d.email||"n/a" } };
+      return { valid: true, paid: false, info: { "Username": `${d.username}#${d.discriminator}`, "Bot ID": d.id, "Verified": d.verified, "Email": d.email||"n/a", "Plan": '🆓 Free (Discord bots are free)' } };
     },
   },
 
@@ -355,7 +363,7 @@ const KEY_DEFS = [
       });
       const d = await r.json();
       if (!r.ok || d.error) return { valid: false, error: d?.error || `HTTP ${r.status}` };
-      return { valid: true, info: { "Username": d.username } };
+      return { valid: true, paid: null, info: { "Username": d.username, "Plan": '⚠ Paid/Free unknown' } };
     },
   },
 
@@ -422,15 +430,33 @@ export default function App() {
   const [result,     setResult]     = useState(null);
   const [history,    setHistory]    = useState([]);      // [{name,valid,ts,info}]
   const [activeTab,  setActiveTab]  = useState("validator"); // validator|history|about
+  const [autoInput,  setAutoInput]  = useState("");           // raw paste for auto-detect
+  const [autoMatches,setAutoMatches]= useState([]);           // matched KEY_DEFs
 
   const def = KEY_DEFS.find(k=>k.id===selected);
 
+  // Auto-detect: match pasted value against all regex patterns
+  const handleAutoInput = useCallback((val) => {
+    setAutoInput(val);
+    const trimmed = val.trim();
+    if (!trimmed) { setAutoMatches([]); return; }
+    const matches = KEY_DEFS.filter(k => k.regex && k.regex.test(trimmed));
+    setAutoMatches(matches);
+    // Auto-select if exactly one match
+    if (matches.length === 1) {
+      setSelected(matches[0].id);
+      setFields({ key: trimmed });
+      setState("idle");
+      setResult(null);
+    }
+  }, []);
+
   const selectDef = useCallback((id) => {
     setSelected(id);
-    setFields({});
+    setFields(autoInput.trim() ? { key: autoInput.trim() } : {});
     setState("idle");
     setResult(null);
-  }, []);
+  }, [autoInput]);
 
   const validate = async () => {
     if (!def) return;
@@ -448,7 +474,8 @@ export default function App() {
       const res = await def.validate({ key: keyVal, secret: fields.secret?.trim()||"" });
       setState(res.valid ? "valid" : "invalid");
       setResult(res);
-      setHistory(h => [{ id: def.id, name: def.name, color: def.color, valid: res.valid, ts: new Date(), info: res.info, error: res.error }, ...h].slice(0, 50));
+      const sev = res.valid ? getSeverityMeta(res.paid, def.id, res.info) : null;
+      setHistory(h => [{ id: def.id, name: def.name, color: def.color, valid: res.valid, ts: new Date(), info: res.info, error: res.error, sev }, ...h].slice(0, 50));
     } catch(e) {
       setState("invalid");
       setResult({ valid:false, error: "Request failed: " + e.message });
@@ -562,10 +589,44 @@ export default function App() {
             {/* Right — Validator panel */}
             <div style={{ padding:"24px", overflowY:"auto" }}>
               {!def ? (
-                <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:12, color:C.textMuted }}>
+                <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:16, padding:"32px" }}>
                   <div style={{ fontSize:48 }}>🔑</div>
-                  <div style={{ fontSize:16, fontWeight:600, color:C.textMid }}>Select a key type to validate</div>
-                  <div style={{ fontSize:13 }}>Choose from {KEY_DEFS.length} supported API key types on the left</div>
+                  <div style={{ fontSize:16, fontWeight:700, color:C.textMid, textAlign:"center" }}>Paste any API key to auto-detect</div>
+                  <div style={{ fontSize:13, color:C.textMuted, textAlign:"center", maxWidth:400 }}>KeySentinel will instantly identify the key type and prepare it for validation — or manually select a provider from the left.</div>
+                  <div style={{ width:"100%", maxWidth:500, position:"relative" }}>
+                    <textarea
+                      value={autoInput}
+                      onChange={e => handleAutoInput(e.target.value)}
+                      placeholder={"Paste any key here…\n\nsk-ant-api03-…\nghp_xxxxx…\nsk_live_xxxxx…\nAKIAxxxxxxxx…\netc."}
+                      style={{ width:"100%", background:C.surface, border:`1.5px solid ${autoMatches.length>0?"#0284c7":C.border}`, color:C.text, padding:"14px", borderRadius:8, fontFamily:"'JetBrains Mono',monospace", fontSize:12, resize:"none", height:120, lineHeight:1.6, transition:"border-color 0.2s" }}
+                    />
+                    {autoInput && (
+                      <button onClick={()=>{ setAutoInput(""); setAutoMatches([]); }} style={{ position:"absolute", top:8, right:10, background:"none", border:"none", cursor:"pointer", color:C.textMuted, fontSize:16 }}>×</button>
+                    )}
+                  </div>
+                  {autoMatches.length > 0 && (
+                    <div style={{ width:"100%", maxWidth:500 }} className="fade-up">
+                      <div style={{ fontSize:11, fontWeight:600, color:C.textMuted, letterSpacing:"0.06em", textTransform:"uppercase", marginBottom:8 }}>
+                        {autoMatches.length === 1 ? "✓ Detected — loading validator…" : `${autoMatches.length} possible matches — select one:`}
+                      </div>
+                      {autoMatches.map(m => (
+                        <button key={m.id} className="key-card" onClick={() => selectDef(m.id)}
+                          style={{ borderColor:m.color, background:`${m.color}08` }}>
+                          <div style={{ width:10, height:10, borderRadius:"50%", background:m.color, flexShrink:0 }}/>
+                          <div>
+                            <div style={{ fontSize:13, fontWeight:600, color:m.color }}>{m.name}</div>
+                            <div style={{ fontSize:11, color:C.textMuted }}>{m.category}</div>
+                          </div>
+                          <span style={{ marginLeft:"auto", fontSize:11, color:C.textMuted }}>→ Validate</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {autoInput && autoMatches.length === 0 && (
+                    <div className="fade-up" style={{ fontSize:12, color:C.textMuted, background:C.surfaceAlt, border:`1px solid ${C.border}`, padding:"10px 16px", borderRadius:6, maxWidth:500, width:"100%", textAlign:"center" }}>
+                      No pattern match found. Select a provider manually from the left panel.
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div style={{ maxWidth:600 }} className="fade-up">
@@ -611,24 +672,41 @@ export default function App() {
                   </button>
 
                   {/* Result */}
-                  {result && (
-                    <div className="fade-up" style={{ background:result.valid?C.successBg:C.dangerBg, border:`1px solid ${result.valid?"#bbf7d0":"#fecaca"}`, borderRadius:8, padding:"16px 20px" }}>
-                      <div style={{ fontWeight:700, color:result.valid?C.success:C.danger, marginBottom: result.info ? 12 : 0, fontSize:14 }}>
-                        {result.valid ? "✓ Key is valid and active" : `✗ ${sanitize(result.error||"Invalid key")}`}
-                      </div>
-                      {result.warning && <div style={{ fontSize:12, color:"#d97706", marginBottom:10 }}>⚠ {result.warning}</div>}
-                      {result.info && (
-                        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-                          {Object.entries(result.info).map(([k,v])=>(
-                            <div key={k} style={{ background:"rgba(255,255,255,0.7)", borderRadius:6, padding:"8px 12px" }}>
-                              <div style={{ fontSize:10, fontWeight:600, color:C.textMuted, letterSpacing:"0.05em", textTransform:"uppercase", marginBottom:3 }}>{k}</div>
-                              <div style={{ fontSize:12, color:C.text, fontFamily:"'JetBrains Mono',monospace", wordBreak:"break-all" }}>{sanitize(String(v??"-"))}</div>
+                  {result && (() => {
+                    const sev = result.valid ? getSeverityMeta(result.paid, def.id, result.info) : null;
+                    return (
+                      <div className="fade-up">
+                        {/* Severity Banner — only on valid keys */}
+                        {result.valid && sev && (
+                          <div style={{ background:sev.bg, border:`2px solid ${sev.border}`, borderRadius:8, padding:"12px 18px", marginBottom:10, display:"flex", alignItems:"center", gap:12 }}>
+                            <span style={{ fontSize:22 }}>{sev.icon}</span>
+                            <div>
+                              <div style={{ fontSize:13, fontWeight:800, color:sev.color, letterSpacing:"0.04em" }}>{sev.label}</div>
+                              {result.keyType && <div style={{ fontSize:11, color:sev.color, opacity:0.8, marginTop:2 }}>Key type: {result.keyType}</div>}
                             </div>
-                          ))}
+                            <div style={{ marginLeft:"auto", background:sev.color, color:"#fff", padding:"4px 12px", borderRadius:20, fontSize:11, fontWeight:700, letterSpacing:"0.06em" }}>{sev.level.toUpperCase()}</div>
+                          </div>
+                        )}
+                        {/* Main result card */}
+                        <div style={{ background:result.valid?C.successBg:C.dangerBg, border:`1px solid ${result.valid?"#bbf7d0":"#fecaca"}`, borderRadius:8, padding:"16px 20px" }}>
+                          <div style={{ fontWeight:700, color:result.valid?C.success:C.danger, marginBottom: result.info ? 12 : 0, fontSize:14 }}>
+                            {result.valid ? "✓ Key is valid and active" : `✗ ${sanitize(result.error||"Invalid key")}`}
+                          </div>
+                          {result.warning && <div style={{ fontSize:12, color:"#d97706", marginBottom:10 }}>⚠ {result.warning}</div>}
+                          {result.info && (
+                            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                              {Object.entries(result.info).map(([k,v])=>(
+                                <div key={k} style={{ background:"rgba(255,255,255,0.7)", borderRadius:6, padding:"8px 12px" }}>
+                                  <div style={{ fontSize:10, fontWeight:600, color:C.textMuted, letterSpacing:"0.05em", textTransform:"uppercase", marginBottom:3 }}>{k}</div>
+                                  <div style={{ fontSize:12, color:C.text, fontFamily:"'JetBrains Mono',monospace", wordBreak:"break-all" }}>{sanitize(String(v??"-"))}</div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  )}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
@@ -654,6 +732,7 @@ export default function App() {
                       <span className="badge" style={{ background:h.valid?"#f0fdf4":"#fef2f2", color:h.valid?C.success:C.danger }}>{h.valid?"✓ Valid":"✗ Invalid"}</span>
                       <span style={{ fontSize:11, color:C.textMuted, marginLeft:"auto" }}>{h.ts.toLocaleTimeString()}</span>
                     </div>
+                    {h.sev && <div style={{ display:"inline-flex", alignItems:"center", gap:6, marginBottom:4, background:h.sev.bg, border:`1px solid ${h.sev.border}`, borderRadius:4, padding:"2px 8px" }}><span style={{fontSize:12}}>{h.sev.icon}</span><span style={{fontSize:11,fontWeight:700,color:h.sev.color}}>{h.sev.label}</span></div>}
                     {h.error && <div style={{ fontSize:12, color:C.danger }}>{sanitize(h.error)}</div>}
                     {h.info && (
                       <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:6 }}>
